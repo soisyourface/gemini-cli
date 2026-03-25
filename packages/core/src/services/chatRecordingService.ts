@@ -680,7 +680,10 @@ export class ChatRecordingService {
         return; // Nothing to delete
       }
 
-      const matchingFiles = this.getMatchingSessionFiles(chatsDir, shortId);
+      const matchingFiles = await this.getMatchingSessionFiles(
+        chatsDir,
+        shortId,
+      );
       for (const file of matchingFiles) {
         await this.deleteSessionAndArtifacts(chatsDir, file, tempDir);
       }
@@ -709,8 +712,11 @@ export class ChatRecordingService {
     return shortId;
   }
 
-  private getMatchingSessionFiles(chatsDir: string, shortId: string): string[] {
-    const files = fs.readdirSync(chatsDir);
+  private async getMatchingSessionFiles(
+    chatsDir: string,
+    shortId: string,
+  ): Promise<string[]> {
+    const files = await fs.promises.readdir(chatsDir);
     return files.filter(
       (f) =>
         f.startsWith(SESSION_FILE_PREFIX) &&
