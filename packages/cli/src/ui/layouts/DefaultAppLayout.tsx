@@ -24,14 +24,25 @@ export const DefaultAppLayout: React.FC = () => {
 
   const { rootUiRef, terminalHeight } = uiState;
   useFlickerDetector(rootUiRef, terminalHeight);
-  // If in alternate buffer mode, need to leave room to draw the scrollbar on
-  // the right side of the terminal.
+
   return (
     <Box
       flexDirection="column"
       width={uiState.terminalWidth}
-      height={isAlternateBuffer ? terminalHeight : undefined}
-      paddingBottom={isAlternateBuffer ? 1 : undefined}
+      height={
+        uiState.isTransitioningAltBuffer
+          ? undefined
+          : isAlternateBuffer
+            ? terminalHeight
+            : undefined
+      }
+      paddingBottom={
+        !uiState.isTransitioningAltBuffer &&
+        isAlternateBuffer &&
+        !uiState.copyModeEnabled
+          ? 1
+          : undefined
+      }
       flexShrink={0}
       flexGrow={0}
       overflow="hidden"
@@ -57,15 +68,13 @@ export const DefaultAppLayout: React.FC = () => {
             />
           </Box>
         )}
+
       <Box
         flexDirection="column"
         ref={uiState.mainControlsRef}
         flexShrink={0}
         flexGrow={0}
         width={uiState.terminalWidth}
-        height={
-          uiState.copyModeEnabled ? uiState.stableControlsHeight : undefined
-        }
       >
         <Notifications />
         <CopyModeWarning />
@@ -80,7 +89,6 @@ export const DefaultAppLayout: React.FC = () => {
         ) : (
           <Composer isFocused={true} />
         )}
-
         <ExitWarning />
       </Box>
     </Box>

@@ -309,6 +309,7 @@ describe('<ShellToolMessage />', () => {
           settings: createMockSettings({ ui: { useAlternateBuffer: true } }),
           uiState: {
             constrainHeight: false,
+            isAlternateBuffer: true,
           },
         },
       );
@@ -337,6 +338,7 @@ describe('<ShellToolMessage />', () => {
           settings: createMockSettings({ ui: { useAlternateBuffer: true } }),
           uiState: {
             constrainHeight: false,
+            isAlternateBuffer: true,
           },
         },
       );

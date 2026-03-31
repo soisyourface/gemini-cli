@@ -3645,7 +3645,7 @@ describe('InputPrompt', () => {
 
         const { stdin, stdout, unmount } = await renderWithProviders(
           <InputPrompt {...props} />,
-          { mouseEventsEnabled: true, uiActions },
+          { uiActions },
         );
 
         // Wait for initial render
@@ -3679,7 +3679,7 @@ describe('InputPrompt', () => {
 
       const { stdin, stdout, unmount } = await renderWithProviders(
         <InputPrompt {...props} />,
-        { mouseEventsEnabled: true, uiActions },
+        { uiActions },
       );
       await waitFor(() => {
         expect(stdout.lastFrame()).toContain('hello');
@@ -3752,9 +3752,9 @@ describe('InputPrompt', () => {
       const { stdout, unmount, simulateClick } = await renderWithProviders(
         <TestWrapper />,
         {
-          mouseEventsEnabled: true,
           config: makeFakeConfig({ useAlternateBuffer: true }),
           settings: createMockSettings({ ui: { useAlternateBuffer: true } }),
+          uiState: { isAlternateBuffer: true },
           uiActions,
         },
       );
@@ -3844,9 +3844,9 @@ describe('InputPrompt', () => {
       const { stdout, unmount, simulateClick } = await renderWithProviders(
         <TestWrapper />,
         {
-          mouseEventsEnabled: true,
           config: makeFakeConfig({ useAlternateBuffer: true }),
           settings: createMockSettings({ ui: { useAlternateBuffer: true } }),
+          uiState: { isAlternateBuffer: true },
           uiActions,
         },
       );
@@ -3880,7 +3880,7 @@ describe('InputPrompt', () => {
 
       const { stdin, stdout, unmount } = await renderWithProviders(
         <InputPrompt {...props} />,
-        { mouseEventsEnabled: true, uiActions },
+        { uiActions },
       );
 
       // Wait for initial render
@@ -4931,7 +4931,6 @@ describe('InputPrompt', () => {
       {
         name: 'mouse right-click paste occurs',
         input: '\x1b[<2;1;1m',
-        mouseEventsEnabled: true,
         setupMocks: () => {
           vi.mocked(clipboardUtils.clipboardHasImage).mockResolvedValue(false);
           vi.mocked(clipboardy.read).mockResolvedValue('clipboard text');
@@ -4951,7 +4950,7 @@ describe('InputPrompt', () => {
       },
     ])(
       'should close shortcuts help when a $name',
-      async ({ input, setupMocks, mouseEventsEnabled }) => {
+      async ({ input, setupMocks }) => {
         setupMocks?.();
         const setShortcutsHelpVisible = vi.fn();
         const { stdin, unmount } = await renderWithProviders(
@@ -4959,7 +4958,6 @@ describe('InputPrompt', () => {
           {
             uiState: { shortcutsHelpVisible: true },
             uiActions: { setShortcutsHelpVisible },
-            mouseEventsEnabled,
           },
         );
 

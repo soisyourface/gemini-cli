@@ -21,12 +21,7 @@ export const ScreenReaderAppLayout: React.FC = () => {
   useFlickerDetector(rootUiRef, terminalHeight);
 
   return (
-    <Box
-      flexDirection="column"
-      width="90%"
-      height="100%"
-      ref={uiState.rootUiRef}
-    >
+    <Box flexDirection="column" width="90%" height="100%" marginX={3}>
       <Notifications />
       <Footer />
       <Box flexGrow={1} overflow="hidden">
@@ -38,9 +33,8 @@ export const ScreenReaderAppLayout: React.FC = () => {
           addItem={uiState.historyManager.addItem}
         />
       ) : (
-        <Composer />
+        <Composer isFocused={true} />
       )}
-
       <ExitWarning />
     </Box>
   );

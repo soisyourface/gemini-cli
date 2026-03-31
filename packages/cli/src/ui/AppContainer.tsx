@@ -68,8 +68,10 @@ import {
   writeToStdout,
   disableMouseEvents,
   enterAlternateScreen,
+  exitAlternateScreen,
   enableMouseEvents,
   disableLineWrapping,
+  enableLineWrapping,
   shouldEnterAlternateScreen,
   startupProfiler,
   SessionStartSource,
@@ -214,7 +216,18 @@ export const AppContainer = (props: AppContainerProps) => {
   });
 
   useMemoryMonitor(historyManager);
-  const isAlternateBuffer = config.getUseAlternateBuffer();
+  const [isAlternateBuffer, setIsAlternateBuffer] = useState(
+    shouldEnterAlternateScreen(
+      config.getUseAlternateBuffer(),
+      config.getScreenReader(),
+    ),
+  );
+  const [isTransitioningAltBuffer, setIsTransitioningAltBuffer] =
+    useState(false);
+  const isAlternateBufferRef = useRef(isAlternateBuffer);
+  useEffect(() => {
+    isAlternateBufferRef.current = isAlternateBuffer;
+  }, [isAlternateBuffer]);
   const [corgiMode, setCorgiMode] = useState(false);
   const [forceRerenderKey, setForceRerenderKey] = useState(0);
   const [debugMessage, setDebugMessage] = useState<string>('');
@@ -566,7 +579,10 @@ export const AppContainer = (props: AppContainerProps) => {
 
   const { errorCount, clearErrorCount } = useErrorCount();
 
-  const mainAreaWidth = calculateMainAreaWidth(terminalWidth, config);
+  const mainAreaWidth = calculateMainAreaWidth(
+    terminalWidth,
+    isAlternateBuffer,
+  );
   // Derive widths for InputPrompt using shared helper
   const { inputWidth, suggestionsWidth } = useMemo(() => {
     const { inputWidth, suggestionsWidth } =
@@ -613,11 +629,11 @@ export const AppContainer = (props: AppContainerProps) => {
   });
 
   const refreshStatic = useCallback(() => {
-    if (!isAlternateBuffer) {
+    if (!isAlternateBufferRef.current) {
       stdout.write(ansiEscapes.clearTerminal);
     }
     setHistoryRemountKey((prev) => prev + 1);
-  }, [setHistoryRemountKey, isAlternateBuffer, stdout]);
+  }, [setHistoryRemountKey, stdout]);
 
   const shouldUseAlternateScreen = shouldEnterAlternateScreen(
     isAlternateBuffer,
@@ -1652,7 +1668,8 @@ Logging in with Google... Restarting Gemini CLI to continue.
     setRawMode,
     refreshStatic,
     setForceRerenderKey,
-    shouldUseAlternateScreen,
+    isAlternateBufferRef,
+    config,
   });
 
   useEffect(() => {
@@ -1713,6 +1730,36 @@ Logging in with Google... Restarting Gemini CLI to continue.
     [handleSlashCommand, settings],
   );
 
+  const applyAlternateBufferMode = useCallback(
+    (next: boolean) => {
+      if (next) {
+        enterAlternateScreen();
+        disableLineWrapping();
+        enableMouseEvents();
+      } else {
+        exitAlternateScreen();
+        enableLineWrapping();
+        disableMouseEvents();
+        setCopyModeEnabled(false);
+      }
+    },
+    [setCopyModeEnabled],
+  );
+
+  useEffect(() => {
+    if (isTransitioningAltBuffer) {
+      const timer = setTimeout(() => {
+        isAlternateBufferRef.current = false;
+        applyAlternateBufferMode(false);
+        refreshStatic();
+        setIsAlternateBuffer(false);
+        setIsTransitioningAltBuffer(false);
+      }, 150); // 150ms ensures Ink flushes the 'display: none' layout to the alternate buffer BEFORE we exit
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [isTransitioningAltBuffer, applyAlternateBufferMode, refreshStatic]);
+
   const handleGlobalKeypress = useCallback(
     (key: Key): boolean => {
       // Debug log keystrokes if enabled
@@ -1724,7 +1771,29 @@ Logging in with Google... Restarting Gemini CLI to continue.
         setShortcutsHelpVisible(false);
       }
 
-      if (isAlternateBuffer && keyMatchers[Command.TOGGLE_COPY_MODE](key)) {
+      if (keyMatchers[Command.TOGGLE_ALTERNATE_BUFFER](key)) {
+        if (config.getScreenReader()) {
+          return true;
+        }
+
+        const next = !isAlternateBufferRef.current;
+        if (next) {
+          // Entering alternate buffer mode: Safe to do synchronously as we won't erase scrollback
+          isAlternateBufferRef.current = true;
+          applyAlternateBufferMode(true);
+          setIsAlternateBuffer(true);
+        } else {
+          // Exiting alternate buffer mode: Trigger a delay to let Ink clear its alternate buffer frame
+          // to 0 lines *before* swapping the terminal, otherwise it will erase normal scrollback.
+          setIsTransitioningAltBuffer(true);
+        }
+        return true;
+      }
+
+      if (
+        isAlternateBufferRef.current &&
+        keyMatchers[Command.TOGGLE_COPY_MODE](key)
+      ) {
         setCopyModeEnabled(true);
         disableMouseEvents();
         return true;
@@ -1746,9 +1815,10 @@ Logging in with Google... Restarting Gemini CLI to continue.
         return true;
       } else if (keyMatchers[Command.SUSPEND_APP](key)) {
         handleSuspend();
+        return true;
       } else if (
         keyMatchers[Command.TOGGLE_COPY_MODE](key) &&
-        !isAlternateBuffer
+        !isAlternateBufferRef.current
       ) {
         showTransientMessage({
           text: 'Use Ctrl+O to expand and collapse blocks of content.',
@@ -1777,7 +1847,7 @@ Logging in with Google... Restarting Gemini CLI to continue.
         if (keyMatchers[Command.SHOW_MORE_LINES](key)) {
           toggleLastTurnTools();
         }
-        if (!isAlternateBuffer) {
+        if (!isAlternateBufferRef.current) {
           refreshStatic();
         }
       }
@@ -1824,7 +1894,11 @@ Logging in with Google... Restarting Gemini CLI to continue.
       ) {
         setConstrainHeight(false);
         toggleLastTurnTools();
-        refreshStatic();
+        // If the user manually expands the view, show the hint and reset the x-second timer.
+        triggerExpandHint(true);
+        if (!isAlternateBufferRef.current) {
+          refreshStatic();
+        }
         return true;
       } else if (
         (keyMatchers[Command.FOCUS_SHELL_INPUT](key) ||
@@ -1915,8 +1989,8 @@ Logging in with Google... Restarting Gemini CLI to continue.
       refreshStatic,
       setCopyModeEnabled,
       tabFocusTimeoutRef,
-      isAlternateBuffer,
       shortcutsHelpVisible,
+      applyAlternateBufferMode,
       backgroundCurrentExecution,
       toggleBackgroundTasks,
       backgroundTasks,
@@ -1935,7 +2009,10 @@ Logging in with Google... Restarting Gemini CLI to continue.
     ],
   );
 
-  useKeypress(handleGlobalKeypress, { isActive: true, priority: true });
+  useKeypress(handleGlobalKeypress, {
+    isActive: true,
+    priority: KeypressPriority.Critical,
+  });
 
   useKeypress(
     (key: Key) => {
@@ -2255,6 +2332,8 @@ Logging in with Google... Restarting Gemini CLI to continue.
     () => ({
       history: historyManager.history,
       historyManager,
+      isAlternateBuffer: isAlternateBuffer && !isTransitioningAltBuffer,
+      isTransitioningAltBuffer,
       isThemeDialogOpen,
 
       themeError,
@@ -2504,6 +2583,8 @@ Logging in with Google... Restarting Gemini CLI to continue.
       adminSettingsChanged,
       newAgents,
       showIsExpandableHint,
+      isAlternateBuffer,
+      isTransitioningAltBuffer,
     ],
   );
 

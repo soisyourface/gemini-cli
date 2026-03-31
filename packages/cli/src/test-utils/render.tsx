@@ -496,6 +496,8 @@ export const mockSettings = createMockSettings();
 // A minimal mock UIState to satisfy the context provider.
 // Tests that need specific UIState values should provide their own.
 const baseMockUiState = {
+  isAlternateBuffer: false,
+  isTransitioningAltBuffer: false,
   history: [],
   renderMarkdown: true,
   streamingState: StreamingState.Idle,
@@ -610,7 +612,6 @@ export const renderWithProviders = async (
     settings = mockSettings,
     uiState: providedUiState,
     width,
-    mouseEventsEnabled = false,
     config,
     uiActions,
     toolActions,
@@ -621,7 +622,6 @@ export const renderWithProviders = async (
     settings?: LoadedSettings;
     uiState?: Partial<UIState>;
     width?: number;
-    mouseEventsEnabled?: boolean;
     config?: Config;
     uiActions?: Partial<UIActions>;
     toolActions?: Partial<{
@@ -636,8 +636,29 @@ export const renderWithProviders = async (
     appState?: AppState;
   } = {},
 ): Promise<RenderWithProvidersInstance> => {
+  if (persistentState?.get) {
+    persistentStateMock.get.mockImplementation(persistentState.get);
+  }
+  if (persistentState?.set) {
+    persistentStateMock.set.mockImplementation(persistentState.set);
+  }
+
+  persistentStateMock.mockClear();
+
+  if (!config) {
+    config = await loadCliConfig(
+      settings.merged,
+      'random-session-id',
+      {} as unknown as CliArgs,
+      { cwd: '/' },
+    );
+  }
+
   const baseState: UIState = new Proxy(
-    { ...baseMockUiState, ...providedUiState },
+    {
+      ...baseMockUiState,
+      ...providedUiState,
+    },
     {
       get(target, prop) {
         if (prop in target) {
@@ -654,25 +675,7 @@ export const renderWithProviders = async (
     },
   ) as UIState;
 
-  if (persistentState?.get) {
-    persistentStateMock.get.mockImplementation(persistentState.get);
-  }
-  if (persistentState?.set) {
-    persistentStateMock.set.mockImplementation(persistentState.set);
-  }
-
-  persistentStateMock.mockClear();
-
   const terminalWidth = width ?? baseState.terminalWidth;
-
-  if (!config) {
-    config = await loadCliConfig(
-      settings.merged,
-      'random-session-id',
-      {} as unknown as CliArgs,
-      { cwd: '/' },
-    );
-  }
 
   const mainAreaWidth = providedUiState?.mainAreaWidth ?? terminalWidth;
 
@@ -733,9 +736,7 @@ export const renderWithProviders = async (
                             onCancel={vi.fn()}
                           >
                             <KeypressProvider>
-                              <MouseProvider
-                                mouseEventsEnabled={mouseEventsEnabled}
-                              >
+                              <MouseProvider>
                                 <TerminalProvider>
                                   <ScrollProvider>
                                     <ContextCapture>
@@ -853,7 +854,6 @@ export async function renderHookWithProviders<Result, Props>(
     settings?: LoadedSettings;
     uiState?: Partial<UIState>;
     width?: number;
-    mouseEventsEnabled?: boolean;
     config?: Config;
   } = {},
 ): Promise<{
