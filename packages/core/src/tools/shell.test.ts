@@ -397,7 +397,11 @@ describe('ShellTool', () => {
       // Advance time to trigger the background timeout
       await vi.advanceTimersByTimeAsync(250);
 
-      expect(mockShellBackground).toHaveBeenCalledWith(12345);
+      expect(mockShellBackground).toHaveBeenCalledWith(
+        12345,
+        'default',
+        'sleep 10',
+      );
 
       await promise;
     });
@@ -637,7 +641,11 @@ describe('ShellTool', () => {
         // Advance time to trigger the background timeout
         await vi.advanceTimersByTimeAsync(250);
 
-        expect(mockShellBackground).toHaveBeenCalledWith(12345);
+        expect(mockShellBackground).toHaveBeenCalledWith(
+          12345,
+          'default',
+          'sleep 10',
+        );
 
         await promise;
       });
