@@ -8,7 +8,7 @@ import { type Status } from '../scheduler/types.js';
 import { type ThoughtSummary } from '../utils/thoughtUtils.js';
 import { getProjectHash } from '../utils/paths.js';
 import path from 'node:path';
-import fs from 'node:fs';
+import * as fs from 'node:fs';
 import { sanitizeFilenamePart } from '../utils/fileUtils.js';
 import {
   deleteSessionArtifactsAsync,
@@ -27,6 +27,8 @@ import type { ToolResultDisplay } from '../tools/tools.js';
 import type { AgentLoopContext } from '../config/agent-loop-context.js';
 
 export const SESSION_FILE_PREFIX = 'session-';
+const MAX_HISTORY_MESSAGES = 50;
+const MAX_TOOL_OUTPUT_SIZE = 50 * 1024; // 50KB
 
 /**
  * Warning message shown when recording is disabled due to disk full.
@@ -124,7 +126,78 @@ export interface ResumedSessionData {
  * Returns null if the file is invalid or cannot be read.
  */
 export interface LoadConversationOptions {
+  maxMessages?: number;
   metadataOnly?: boolean;
+}
+
+interface RewindRecord {
+  $rewindTo: string;
+}
+
+interface MetadataUpdateRecord {
+  $set: Partial<ConversationRecord>;
+}
+
+interface PartialMetadataRecord {
+  sessionId: string;
+  projectHash: string;
+  startTime?: string;
+  lastUpdated?: string;
+  summary?: string;
+  directories?: string[];
+  kind?: 'main' | 'subagent';
+}
+
+function isRewindRecord(record: unknown): record is RewindRecord {
+  return (
+    record !== null &&
+    typeof record === 'object' &&
+    '$rewindTo' in record &&
+    typeof record.$rewindTo === 'string'
+  );
+}
+
+function isMessageRecord(record: unknown): record is MessageRecord {
+  return (
+    record !== null &&
+    typeof record === 'object' &&
+    'id' in record &&
+    typeof record.id === 'string'
+  );
+}
+
+function isMetadataUpdateRecord(
+  record: unknown,
+): record is MetadataUpdateRecord {
+  return (
+    record !== null &&
+    typeof record === 'object' &&
+    '$set' in record &&
+    record.$set !== null &&
+    typeof record.$set === 'object'
+  );
+}
+
+function isPartialMetadataRecord(
+  record: unknown,
+): record is PartialMetadataRecord {
+  return (
+    record !== null &&
+    typeof record === 'object' &&
+    'sessionId' in record &&
+    typeof record.sessionId === 'string' &&
+    'projectHash' in record &&
+    typeof record.projectHash === 'string'
+  );
+}
+
+function isTextPart(part: unknown): part is { text: string } {
+  return (
+    part !== null &&
+    typeof part === 'object' &&
+    'text' in part &&
+    typeof part.text === 'string'
+  );
 }
 
 export async function loadConversationRecord(
@@ -153,11 +226,9 @@ export async function loadConversationRecord(
     for await (const line of rl) {
       if (!line.trim()) continue;
       try {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-        const record = JSON.parse(line) as Record<string, unknown>;
-        if (record['$rewindTo']) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-          const rewindId = record['$rewindTo'] as string;
+        const record = JSON.parse(line) as unknown;
+        if (isRewindRecord(record)) {
+          const rewindId = record.$rewindTo;
           if (options?.metadataOnly) {
             const idx = messageIds.indexOf(rewindId);
             if (idx !== -1) {
@@ -180,27 +251,24 @@ export async function loadConversationRecord(
               messagesMap.clear();
             }
           }
-        } else if (record['id']) {
+        } else if (isMessageRecord(record)) {
+          const id = record.id;
           // Track message count and first user message
           if (options?.metadataOnly) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-            messageIds.push(record['id'] as string);
+            messageIds.push(id);
           }
           if (
             !firstUserMessageStr &&
-            record['type'] === 'user' &&
-            record['content']
+            'type' in record &&
+            record.type === 'user' &&
+            'content' in record &&
+            record.content
           ) {
             // Basic extraction of first user message for display
-            const rawContent = record['content'];
+            const rawContent = record.content;
             if (Array.isArray(rawContent)) {
               firstUserMessageStr = rawContent
-                .map((p: unknown) => {
-                  if (!p || typeof p !== 'object' || !('text' in p)) return '';
-
-                  const text = (p as Record<string, unknown>)['text'];
-                  return typeof text === 'string' ? text : '';
-                })
+                .map((p: unknown) => (isTextPart(p) ? p.text : ''))
                 .join('');
             } else if (typeof rawContent === 'string') {
               firstUserMessageStr = rawContent;
@@ -208,20 +276,22 @@ export async function loadConversationRecord(
           }
 
           if (!options?.metadataOnly) {
-            messagesMap.set(
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              record['id'] as string,
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-              record as unknown as MessageRecord,
-            );
+            messagesMap.set(id, record);
+            if (
+              options?.maxMessages &&
+              messagesMap.size > options.maxMessages
+            ) {
+              const firstKey = messagesMap.keys().next().value;
+              if (typeof firstKey === 'string') messagesMap.delete(firstKey);
+            }
           }
-        } else if (record['$set']) {
+        } else if (isMetadataUpdateRecord(record)) {
           // Metadata update
           metadata = {
             ...metadata,
-            ...(record['$set'] as Partial<ConversationRecord>),
+            ...record.$set,
           };
-        } else if (record['sessionId'] && record['projectHash']) {
+        } else if (isPartialMetadataRecord(record)) {
           // Initial metadata line
           metadata = { ...metadata, ...record };
         }
@@ -252,6 +322,39 @@ export async function loadConversationRecord(
     debugLogger.error('Error loading conversation record from JSONL:', error);
     return null;
   }
+}
+
+function truncateLargeToolResults(message: MessageRecord): MessageRecord {
+  if (message.type !== 'gemini' || !message.toolCalls) return message;
+
+  let modified = false;
+  const truncatedCalls = message.toolCalls.map((tc) => {
+    if (!tc.result) return tc;
+    const str = JSON.stringify(tc.result);
+    if (str.length > MAX_TOOL_OUTPUT_SIZE) {
+      modified = true;
+      return {
+        ...tc,
+        result: [
+          {
+            functionResponse: {
+              name: tc.name,
+              response: {
+                result:
+                  '[Output truncated for memory: full content saved to disk]',
+              },
+            },
+          },
+        ],
+      };
+    }
+    return tc;
+  });
+
+  if (modified) {
+    return { ...message, toolCalls: truncatedCalls };
+  }
+  return message;
 }
 
 /**
@@ -286,9 +389,18 @@ export class ChatRecordingService {
 
         const loadedRecord = await loadConversationRecord(
           this.conversationFile,
+          { maxMessages: MAX_HISTORY_MESSAGES },
         );
         if (loadedRecord) {
-          this.cachedConversation = loadedRecord;
+          // Truncate memory messages and keep bounded
+          const boundedMessages = loadedRecord.messages.map(
+            truncateLargeToolResults,
+          );
+
+          this.cachedConversation = {
+            ...loadedRecord,
+            messages: boundedMessages,
+          };
           this.projectHash = this.cachedConversation.projectHash;
 
           // Update the session ID in the existing file
@@ -404,15 +516,23 @@ export class ChatRecordingService {
   private pushMessage(msg: MessageRecord): void {
     if (!this.cachedConversation) return;
 
+    // We append the full, untruncated message to the log
     this.appendRecord(msg);
 
+    // Now update memory with truncated version
+    const truncatedMsg = truncateLargeToolResults(msg);
     const index = this.cachedConversation.messages.findIndex(
       (m) => m.id === msg.id,
     );
     if (index !== -1) {
-      this.cachedConversation.messages[index] = msg;
+      this.cachedConversation.messages[index] = truncatedMsg;
     } else {
-      this.cachedConversation.messages.push(msg);
+      this.cachedConversation.messages.push(truncatedMsg);
+    }
+
+    if (this.cachedConversation.messages.length > MAX_HISTORY_MESSAGES) {
+      this.cachedConversation.messages =
+        this.cachedConversation.messages.slice(-MAX_HISTORY_MESSAGES);
     }
   }
 
@@ -699,11 +819,13 @@ export class ChatRecordingService {
       const content = JSON.parse(firstLine) as unknown;
 
       let fullSessionId: string | undefined;
-      if (content && typeof content === 'object' && 'sessionId' in content) {
-        const id = (content as Record<string, unknown>)['sessionId'];
-        if (typeof id === 'string') {
-          fullSessionId = id;
-        }
+      if (
+        content &&
+        typeof content === 'object' &&
+        'sessionId' in content &&
+        typeof content.sessionId === 'string'
+      ) {
+        fullSessionId = content.sessionId;
       }
 
       // Delete the session file

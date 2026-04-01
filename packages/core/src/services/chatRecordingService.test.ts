@@ -5,9 +5,39 @@
  */
 
 import { expect, it, describe, vi, beforeEach, afterEach } from 'vitest';
-import fs from 'node:fs';
+import * as fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const fsModule = {
+    ...actual,
+    mkdirSync: vi.fn(actual.mkdirSync),
+    appendFileSync: vi.fn(actual.appendFileSync),
+    writeFileSync: vi.fn(actual.writeFileSync),
+    readFileSync: vi.fn(actual.readFileSync),
+    unlinkSync: vi.fn(actual.unlinkSync),
+    existsSync: vi.fn(actual.existsSync),
+    readdirSync: vi.fn(actual.readdirSync),
+    promises: {
+      ...actual.promises,
+      stat: vi.fn(actual.promises.stat),
+      readFile: vi.fn(actual.promises.readFile),
+      unlink: vi.fn(actual.promises.unlink),
+      readdir: vi.fn(actual.promises.readdir),
+      open: vi.fn(actual.promises.open),
+      rm: vi.fn(actual.promises.rm),
+      mkdir: vi.fn(actual.promises.mkdir),
+      writeFile: vi.fn(actual.promises.writeFile),
+    },
+  };
+  return {
+    ...fsModule,
+    default: fsModule,
+  };
+});
+
 import {
   ChatRecordingService,
   loadConversationRecord,
@@ -21,9 +51,11 @@ import type { Config } from '../config/config.js';
 import { getProjectHash } from '../utils/paths.js';
 
 vi.mock('../utils/paths.js');
-vi.mock('node:crypto', () => {
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
   let count = 0;
   return {
+    ...actual,
     randomUUID: vi.fn(() => `test-uuid-${count++}`),
     createHash: vi.fn(() => ({
       update: vi.fn(() => ({
@@ -292,7 +324,7 @@ describe('ChatRecordingService', () => {
     });
 
     it('should not write to disk when queuing tokens (no last gemini message)', async () => {
-      const appendFileSyncSpy = vi.spyOn(fs, 'appendFileSync');
+      const appendFileSyncSpy = vi.mocked(fs.appendFileSync);
 
       // Clear spy call count after initialize writes the initial file
       appendFileSyncSpy.mockClear();
@@ -334,7 +366,7 @@ describe('ChatRecordingService', () => {
         cachedContentTokenCount: 0,
       });
 
-      const appendFileSyncSpy = vi.spyOn(fs, 'appendFileSync');
+      const appendFileSyncSpy = vi.mocked(fs.appendFileSync);
       appendFileSyncSpy.mockClear();
 
       // Second call should only queue, NOT write to disk
@@ -355,7 +387,7 @@ describe('ChatRecordingService', () => {
         model: 'gemini-pro',
       });
 
-      const readFileSyncSpy = vi.spyOn(fs, 'readFileSync');
+      const readFileSyncSpy = vi.mocked(fs.readFileSync);
       readFileSyncSpy.mockClear();
 
       // These operations should all use the in-memory cache
@@ -376,7 +408,6 @@ describe('ChatRecordingService', () => {
 
       // readFileSync should NOT have been called since we use the in-memory cache
       expect(readFileSyncSpy).not.toHaveBeenCalled();
-      readFileSyncSpy.mockRestore();
     });
   });
 
@@ -741,7 +772,7 @@ describe('ChatRecordingService', () => {
       const enospcError = new Error('ENOSPC: no space left on device');
       (enospcError as NodeJS.ErrnoException).code = 'ENOSPC';
 
-      const mkdirSyncSpy = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {
+      const mkdirSyncSpy = vi.mocked(fs.mkdirSync).mockImplementation(() => {
         throw enospcError;
       });
 
@@ -759,7 +790,7 @@ describe('ChatRecordingService', () => {
       const enospcError = new Error('ENOSPC: no space left on device');
       (enospcError as NodeJS.ErrnoException).code = 'ENOSPC';
 
-      vi.spyOn(fs, 'appendFileSync').mockImplementation(() => {
+      vi.mocked(fs.appendFileSync).mockImplementation(() => {
         throw enospcError;
       });
 
@@ -783,7 +814,7 @@ describe('ChatRecordingService', () => {
       (enospcError as NodeJS.ErrnoException).code = 'ENOSPC';
 
       const appendFileSyncSpy = vi
-        .spyOn(fs, 'appendFileSync')
+        .mocked(fs.appendFileSync)
         .mockImplementationOnce(() => {
           throw enospcError;
         });
@@ -821,7 +852,7 @@ describe('ChatRecordingService', () => {
       const enospcError = new Error('ENOSPC: no space left on device');
       (enospcError as NodeJS.ErrnoException).code = 'ENOSPC';
 
-      vi.spyOn(fs, 'appendFileSync').mockImplementation(() => {
+      vi.mocked(fs.appendFileSync).mockImplementation(() => {
         throw enospcError;
       });
 
@@ -843,7 +874,7 @@ describe('ChatRecordingService', () => {
       const otherError = new Error('Permission denied');
       (otherError as NodeJS.ErrnoException).code = 'EACCES';
 
-      vi.spyOn(fs, 'appendFileSync').mockImplementation(() => {
+      vi.mocked(fs.appendFileSync).mockImplementation(() => {
         throw otherError;
       });
 
@@ -1062,7 +1093,7 @@ describe('ChatRecordingService', () => {
         model: 'gemini-pro',
       });
 
-      const appendFileSyncSpy = vi.spyOn(fs, 'appendFileSync');
+      const appendFileSyncSpy = vi.mocked(fs.appendFileSync);
       appendFileSyncSpy.mockClear();
 
       // History with a tool call ID that doesn't exist in the conversation
@@ -1092,8 +1123,8 @@ describe('ChatRecordingService', () => {
     it('should ensure directory exists before writing conversation file', async () => {
       await chatRecordingService.initialize();
 
-      const mkdirSyncSpy = vi.spyOn(fs, 'mkdirSync');
-      const appendFileSyncSpy = vi.spyOn(fs, 'appendFileSync');
+      const mkdirSyncSpy = vi.mocked(fs.mkdirSync);
+      const appendFileSyncSpy = vi.mocked(fs.appendFileSync);
 
       chatRecordingService.recordMessage({
         type: 'user',
